@@ -1,4 +1,5 @@
-import { func } from "joi";
+import joi from 'joi'
+import { nanoid } from 'nanoid';
 import connection from "../database/db.js";
 
 async function getUrlId(req, res) {
@@ -17,6 +18,10 @@ async function getUrlId(req, res) {
         res.sendStatus(500)
     }
 }
+
+const urlSchema = joi.object({
+    url: joi.string().pattern(/^https?:\/\/(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&\/=]*)$/, 'html').required()
+});
 
 async function urlShorten(req, res) {
     const { url } = req.body
@@ -108,26 +113,51 @@ async function deleteUrl(req, res) {
     }
 }
 
-// async function urlMe(req, res) {
-//     const { authorization } = req.headers
+async function urlMe(req, res) {
+    const { authorization } = req.headers
+
+    try {
+        const token = authorization.replace('Bearer ', '')
+        const headerConfirmation = await connection.query("SELECT * FROM sessions WHERE hash = $1;", [token]);
+        if (!headerConfirmation.rows[0]) {
+            res.sendStatus(401)
+        }
+        const getToken = headerConfirmation.rows[0].hash
+
+        const getInfos = await connection.query('SELECT users.id, users.name, links."shortUrl", links.url, links."visitCount" FROM sessions JOIN users ON sessions."userId" = users.id JOIN links ON links."userId" = users.id WHERE sessions.hash = $1;', [getToken])
+
+        if(!getInfos.rows[0].name){
+            res.sendStatus(404)
+        }
+
+        const getInfosExceptName = await connection.query('SELECT links.id, links."shortUrl", links.url, links."visitCount" FROM sessions JOIN users ON sessions."userId" = users.id JOIN links ON links."userId" = users.id WHERE sessions.hash = $1;', [getToken])
+        const sums = await connection.query('SELECT SUM("visitCount") FROM sessions JOIN users ON sessions."userId" = users.id JOIN links ON links."userId" = users.id WHERE sessions.hash = $1;', [getToken])
+
+        const objectMont = {
+            id: getInfos.rows[0].id,
+            name: getInfos.rows[0].name,
+            visitCount: sums.rows[0].sum,
+            shortenedUrls: getInfosExceptName.rows
+        }
+
+        res.send(objectMont).status(200)
+
+    } catch (error) {
+        console.log(error)
+        res.sendStatus(500)
+    }
+}
 
 
-//     try {
-//         const token = authorization.replace('Bearer ', '')
-//         const headerConfirmation = await connection.query("SELECT hash FROM sessions WHERE hash = $1;", [token]);
+async function raking(req, res){
+    try {
+        const list = await connection.query( 'SELECT users.id, users.name, COUNT(links.id) AS "linksCount", COALESCE(SUM(links."visitCount"), 0) AS "visitCount" FROM users LEFT JOIN links ON links."userId" = users.id GROUP BY users.id ORDER BY "visitCount" DESC, "linksCount" DESC LIMIT 10;')
 
+        res.send(list.rows).status(200)
+    } catch (error) {
+        console.log(error)
+        res.sendStatus(500)
+    }
+}
 
-
-//         if (!headerConfirmation.rows[0]) {
-//             res.sendStatus(401)
-//         }
-
-//     } catch (error) {
-//         console.log(error)
-//         res.sendStatus(500)
-//     }
-
-//     res.send('ok').status(200)
-// }
-
-export { getUrlId, getOpenShortUrl, urlShorten, deleteUrl }
+export { getUrlId, getOpenShortUrl, urlShorten, deleteUrl, urlMe, raking }
